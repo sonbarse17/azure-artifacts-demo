@@ -72,4 +72,4 @@ jobs:
           TWINE_REPOSITORY_URL: ${{ secrets.AZURE_ARTIFACTS_PUBLISH_URL }}
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.AZURE_ARTIFACTS_PAT }}
-        run: twine upload --skip-existing dist/*
+        run: twine upload dist/*
