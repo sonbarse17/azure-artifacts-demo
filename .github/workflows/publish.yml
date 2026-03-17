@@ -28,11 +28,14 @@ jobs:
           python -m pip install build twine
 
       - name: Configure pip (Azure Artifacts only)
-        if: ${{ secrets.AZURE_ARTIFACTS_PYPI_URL != '' && secrets.AZURE_ARTIFACTS_PAT != '' }}
         env:
           FEED_URL: ${{ secrets.AZURE_ARTIFACTS_PYPI_URL }}
           FEED_PAT: ${{ secrets.AZURE_ARTIFACTS_PAT }}
         run: |
+          if [ -z "$FEED_URL" ] || [ -z "$FEED_PAT" ]; then
+            echo "Azure feed secrets missing, skipping pip config"
+            exit 0
+          fi
           mkdir -p ~/.config/pip
           python - <<'PY'
           import os
