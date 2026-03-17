@@ -1,0 +1,150 @@
+name: Python CI + Azure Artifacts Publish
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_DEFAULT: "3.11"
+
+jobs:
+  ci:
+    name: CI (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            setup.cfg
+            setup.py
+
+      - name: Install build/test tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine pytest
+
+      - name: Configure pip for Azure Artifacts + public PyPI
+        if: ${{ secrets.AZURE_ARTIFACTS_PYPI_URL != '' && secrets.AZURE_ARTIFACTS_PAT != '' }}
+        env:
+          AZURE_ARTIFACTS_PYPI_URL: ${{ secrets.AZURE_ARTIFACTS_PYPI_URL }}
+          AZURE_ARTIFACTS_PAT: ${{ secrets.AZURE_ARTIFACTS_PAT }}
+        run: |
+          mkdir -p ~/.config/pip
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          repo_url = os.environ["AZURE_ARTIFACTS_PYPI_URL"].strip()
+          pat = os.environ["AZURE_ARTIFACTS_PAT"].strip()
+          parsed = urlparse(repo_url)
+
+          if not (parsed.scheme and parsed.netloc):
+            raise SystemExit("Invalid AZURE_ARTIFACTS_PYPI_URL secret")
+
+          auth_netloc = f"__token__:{pat}@{parsed.netloc}"
+          private_with_auth = f"{parsed.scheme}://{auth_netloc}{parsed.path}"
+
+          pip_conf = f"""[global]
+index-url = {private_with_auth}
+extra-index-url = https://pypi.org/simple
+"""
+
+          with open(os.path.expanduser("~/.config/pip/pip.conf"), "w", encoding="utf-8") as f:
+            f.write(pip_conf)
+          PY
+
+      - name: Install dependencies (if requirements.txt exists)
+        run: |
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          else
+            echo "No requirements.txt found, skipping dependency install"
+          fi
+
+      - name: Run tests (if test suite exists)
+        run: |
+          if [ -d tests ] || [ -f pytest.ini ] || [ -f pyproject.toml ]; then
+            set +e
+            pytest -q
+            rc=$?
+            set -e
+            if [ "$rc" -eq 5 ]; then
+              echo "No tests collected, continuing"
+            elif [ "$rc" -ne 0 ]; then
+              exit "$rc"
+            fi
+          else
+            echo "No tests detected, skipping"
+          fi
+
+      - name: Build distributions
+        if: matrix.python-version == env.PYTHON_DEFAULT
+        run: python -m build
+
+      - name: Upload dist artifact
+        if: matrix.python-version == env.PYTHON_DEFAULT
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-azure:
+    name: Publish to Azure Artifacts
+    runs-on: ubuntu-latest
+    needs: ci
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    environment: release
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Publish package to Azure Artifacts feed
+        env:
+          TWINE_REPOSITORY_URL: ${{ secrets.AZURE_ARTIFACTS_PUBLISH_URL }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.AZURE_ARTIFACTS_PAT }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install twine
+          twine upload --skip-existing dist/*
+
+      - name: Write release summary
+        run: |
+          echo "### Azure Artifacts publish" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag: \\`${GITHUB_REF_NAME}\\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Files:" >> "$GITHUB_STEP_SUMMARY"
+          ls -1 dist | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
