@@ -1,0 +1,50 @@
+name: Verify Install From Azure Artifacts
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Read package name and version
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"PACKAGE_NAME={data['project']['name']}\n")
+              env.write(f"PACKAGE_VERSION={data['project']['version']}\n")
+          PY
+
+      - name: Install published version from Azure Artifacts
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "$PACKAGE_NAME==$PACKAGE_VERSION" \
+            --index-url "https://__token__:${{ secrets.AZURE_ARTIFACTS_PAT }}@pkgs.dev.azure.com/sushantsonbarse8/azure-artifacts-demo/_packaging/python-internal/pypi/simple/"
+
+      - name: Verify installed version
+        run: |
+          python - <<'PY'
+          import os
+          from importlib import metadata
+
+          name = os.environ["PACKAGE_NAME"]
+          expected = os.environ["PACKAGE_VERSION"]
+          actual = metadata.version(name)
+          assert actual == expected, f"expected {expected}, got {actual}"
+          print(f"Verified: {name}=={actual}")
+          PY

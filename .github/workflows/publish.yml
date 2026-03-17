@@ -51,19 +51,16 @@ jobs:
               f.write(f"index-url = {auth_url}\n")
           PY
 
-      - name: Install dependencies (optional)
+      - name: Install dependencies from Azure Artifacts
         run: |
+          python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
+            pip install -r requirements.txt \
+              --extra-index-url https://__token__:${{ secrets.AZURE_ARTIFACTS_PAT }}@pkgs.dev.azure.com/sushantsonbarse8/azure-artifacts-demo/_packaging/python-internal/pypi/simple/
           fi
 
       - name: Build package
         run: python -m build
-
-      - name: Install from built artifact
-        run: |
-          python -m pip install --force-reinstall dist/*.whl
-          python -c "import azure_artifacts_demo; print(azure_artifacts_demo.__version__)"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
